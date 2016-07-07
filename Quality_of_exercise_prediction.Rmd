@@ -1,0 +1,124 @@
+---
+title: "Quality of exercise prediction"
+author: "Miguel Diaz"
+date: "7/7/2016"
+output: html_document
+---
+
+## Introduction
+
+The objective of this document is to use the machine learning methodology (specifically with least squares, random forest and neural networks) to predict how well people are exercising based on cuantitative data measured by accelerometers. More specifically, the variable "classe" in the training set will be the variable to predict.
+
+## Data load
+
+The first step is to download the data from the internet (part of this code is commented and should be uncomented for replication) and load it into R as a data frame. 
+
+Then we show the basic dimensions of the dataset.
+```{r, echo=TRUE, cache=TRUE}
+path_training <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+path_test <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+# download.file(path_training, "training.csv")
+train_set <- read.csv("training.csv", stringsAsFactors = FALSE, na.strings = c("NA", "#DIV/0!", ""))
+
+# download.file(path_test, "test.csv")
+test_set <- read.csv("test.csv", stringsAsFactors = FALSE, na.strings = c("NA", "#DIV/0!", ""))
+
+dim(train_set)
+dim(test_set)
+```
+
+So, the number of observations in the training set is `r dim(train_set)[1]` and the number of observations to predict is `r dim(test_set)[1]`.
+
+## Missing data handling
+
+Once the datasets are loaded, we can appreciate that there is a lot of missing data in some columns. We don't show the head of the whole dataframe due to size, but for example:
+```{r, echo=TRUE}
+head(train_set$kurtosis_roll_belt)
+```
+As we can appreciate is full of missing data.
+
+Then we get rid of variables that contain a lot of missing data.
+```{r,echo=TRUE, cache=TRUE}
+missing_data <- data.frame(names = colnames(train_set), NAS = 0)
+
+for (i in 1:length(missing_data$names)){
+  y <- sum(is.na(train_set[,i]))
+  z <- ifelse(is.na(sum(train_set[,i]=='')),0,sum(train_set[,i]=='') )
+  missing_data$NAS[i] <- z + y
+}
+
+delete <- which(missing_data$NAS>10000) #REmove the variables that lack data
+train_set2 <- train_set[,-delete]
+train_set2 <- train_set2[,-(1:6)]
+dim(train_set2)
+```
+Now, we see that out of the `r dim(train_set)[2]` columns, we keep `r dim(train_set2)[2]`.
+
+## Set the control method and paralellize
+
+```{r, echo = FALSE, message==FALSE, cache=FALSE, results='hide', comment=NA, include=FALSE}
+if(!(require(caret))) install.packages("caret"); require(caret)
+if(!(require(doMC))) install.packages("doMC"); require(doMC)
+if(!(require(randomForest))) install.packages("randomForest"); require(randomForest)
+if(!(require(e1071))) install.packages("e1071", dependencies = TRUE); require(e1071)
+if(!(require(kernlab))) install.packages("kernlab"); require(kernlab)
+if(!(require(arm))) install.packages("arm"); require(arm)
+if(!(require(caTools))) install.packages("caTools"); require(caTools)
+if(!(require(pls))) install.packages("pls"); require(pls)
+```
+
+After loading all the relevan packages (hidden for space purpouses) we can check if there is correlation between the variables, so it will be needed to use principle component analysis to simplify.
+```{r,echo=TRUE, cache=TRUE}
+Correlated <- caret::findCorrelation(cor(train_set2[,-54]), cutoff=0.9) 
+if (length(Correlated)>0) {
+  tc <- trainControl(method = "cv", number = 7, verboseIter=FALSE , preProcOptions="pca", allowParallel=TRUE)
+} else {
+  tc <- trainControl(method = "cv", number = 7, verboseIter=FALSE , allowParallel=TRUE)
+}
+```
+
+## Train the models
+
+After this we train the model using each one of the 3 commented methodologies. In this section we make use of paralellization, since this step takes a lot of time. If you decide to relaunch it, please be aware it can take up to several hours to complete, depending on your hardware.
+```{r, echo=TRUE, cache = TRUE, message=FALSE, results='hide'}
+doMC::registerDoMC(detectCores()-1)
+lm <- caret::train(classe ~ ., data = train_set2, method = "kernelpls", trControl= tc) # Partial Least squares
+rf <- caret::train(classe ~ ., data = train_set2, method = "rf", trControl= tc) # Random forest
+NN <- caret::train(classe ~ ., data = train_set2, method = "nnet", trControl= tc, verbose=FALSE) # Neural networks
+```
+
+## Cross validate models
+
+Once the models have been trained we cross check how good they perform, meaning how good is their accuracy in the training set.
+```{r, echo = TRUE, cache=TRUE}
+model <- c("Least squares","Random Forest", "Neural Network")
+Accuracy <- c(max(lm$results$Accuracy), max(rf$results$Accuracy), max(NN$results$Accuracy))
+
+performance <- data.frame(accuracy = Accuracy)
+rownames(performance) <- model
+
+performance
+```
+It seems that the best model is `r rownames(performance)[2]`.
+
+
+## Predict over the test set
+
+Then we finally use the test data to predict 
+```{r, results='hide', message=FALSE}
+test_set2 <- test_set[,-delete]
+test_set2 <- test_set2[,-(1:6)]
+rfPred <- predict(rf, test_set2)
+lmPred <- predict(lm, test_set2)
+NNPred <- predict(NN,test_set2)
+
+prediction <- data.frame(cbind(rfPred, lmPred, NNPred))
+colnames(prediction) <- c("Random Forest", "Least squares", "Neural Network")
+```
+Since the method with the biggest accuracy is the Random forest, we used this one for the final prediction.
+
+```{r}
+LETTERS[prediction[,1]]
+```
+And those classes are the ones submitted for the final test.
